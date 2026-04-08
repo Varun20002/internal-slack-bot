@@ -1,0 +1,297 @@
+import type { App } from "@slack/bolt";
+import { getBlockButtonValue } from "@/slack/actionValue";
+import { combineDateTimeUtc } from "@/lib/datetime";
+import { getSupabaseAdmin } from "@/lib/supabase";
+import { transitionState } from "@/lib/stateMachine";
+import {
+  altSuggestedNotice,
+  confirmedNotice,
+  employeeAltDecisionBlocks,
+  growthPickupCard,
+  rejectedNotice,
+} from "@/slack/blockKit";
+
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} is not configured`);
+  return v;
+}
+
+export function registerBpActions(app: App): void {
+  app.action("bp_confirm", async ({ ack, body, client, logger }) => {
+    await ack();
+    const requestId = getBlockButtonValue(body);
+    if (!requestId) return;
+    const userId = body.user.id;
+    const userInfo = await client.users.info({ user: userId });
+    const actorName =
+      userInfo.user?.real_name || userInfo.user?.name || userId;
+
+    try {
+      await transitionState({
+        requestId,
+        toState: "CONFIRMED",
+        actorId: userId,
+        actorName,
+        action: "bp_confirm",
+        columnUpdates: { bp_slack_id: userId },
+      });
+    } catch (e) {
+      logger.error("bp_confirm failed", e);
+      return;
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: row } = await supabase
+      .from("webinar_requests")
+      .select("*")
+      .eq("id", requestId)
+      .single();
+
+    if (row?.bp_channel_id && row.bp_message_ts) {
+      await client.chat.update({
+        channel: row.bp_channel_id,
+        ts: row.bp_message_ts,
+        text: `Confirmed: ${row.topic}`,
+        blocks: confirmedNotice(actorName),
+      });
+    }
+
+    if (row?.employee_slack_id) {
+      await client.chat.postMessage({
+        channel: row.employee_slack_id,
+        text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will pick it up shortly.`,
+      });
+    }
+
+    const growthChannel = requireEnv("GROWTH_CHANNEL_ID");
+    const g = await client.chat.postMessage({
+      channel: growthChannel,
+      text: `Pick up webinar: ${row?.topic}`,
+      blocks: growthPickupCard({
+        requestId,
+        topic: row?.topic || "",
+        trainerName: row?.trainer_name || "",
+        requestedDate: row?.requested_date || "",
+      }),
+    });
+
+    if (g.ts && g.channel) {
+      await supabase
+        .from("webinar_requests")
+        .update({
+          growth_channel_id: g.channel,
+          growth_message_ts: g.ts,
+        })
+        .eq("id", requestId);
+    }
+  });
+
+  app.action("bp_reject", async ({ ack, body, client, logger }) => {
+    await ack();
+    const requestId = getBlockButtonValue(body);
+    if (!requestId) return;
+    const triggerId = (body as { trigger_id: string }).trigger_id;
+
+    try {
+      await client.views.open({
+        trigger_id: triggerId,
+        view: {
+          type: "modal",
+          callback_id: "bp_reject_modal",
+          private_metadata: requestId,
+          title: { type: "plain_text", text: "Reject request" },
+          submit: { type: "plain_text", text: "Reject" },
+          close: { type: "plain_text", text: "Cancel" },
+          blocks: [
+            {
+              type: "input",
+              block_id: "reason",
+              label: { type: "plain_text", text: "Reason" },
+              element: {
+                type: "plain_text_input",
+                action_id: "val",
+                multiline: true,
+              },
+            },
+          ],
+        },
+      });
+    } catch (e) {
+      logger.error("bp_reject modal open failed", e);
+    }
+  });
+
+  app.view("bp_reject_modal", async ({ ack, view, client, body, logger }) => {
+    const requestId = view.private_metadata;
+    const reason =
+      view.state.values.reason?.val?.value?.trim() || "";
+    if (!reason) {
+      await ack({
+        response_action: "errors",
+        errors: { reason: "Please provide a reason" },
+      });
+      return;
+    }
+    await ack();
+
+    const userId = body.user.id;
+    const userInfo = await client.users.info({ user: userId });
+    const actorName =
+      userInfo.user?.real_name || userInfo.user?.name || userId;
+
+    try {
+      await transitionState({
+        requestId,
+        toState: "REJECTED",
+        actorId: userId,
+        actorName,
+        action: "bp_reject",
+        metadata: { reason },
+        columnUpdates: {
+          bp_slack_id: userId,
+          rejection_reason: reason,
+        },
+      });
+    } catch (e) {
+      logger.error("bp_reject transition failed", e);
+      return;
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: row } = await supabase
+      .from("webinar_requests")
+      .select("topic, employee_slack_id, bp_channel_id, bp_message_ts")
+      .eq("id", requestId)
+      .single();
+
+    if (row?.bp_channel_id && row.bp_message_ts) {
+      await client.chat.update({
+        channel: row.bp_channel_id,
+        ts: row.bp_message_ts,
+        text: `Rejected: ${row.topic}`,
+        blocks: rejectedNotice(reason, actorName),
+      });
+    }
+
+    if (row?.employee_slack_id) {
+      await client.chat.postMessage({
+        channel: row.employee_slack_id,
+        text: `Your webinar request *${row.topic}* was rejected.\n*Reason:* ${reason}`,
+      });
+    }
+  });
+
+  app.action("bp_suggest_alt", async ({ ack, body, client, logger }) => {
+    await ack();
+    const requestId = getBlockButtonValue(body);
+    if (!requestId) return;
+    try {
+      await client.views.open({
+        trigger_id: (body as { trigger_id: string }).trigger_id,
+        view: {
+          type: "modal",
+          callback_id: "bp_alt_modal",
+          private_metadata: requestId,
+          title: { type: "plain_text", text: "Suggest alternative time" },
+          submit: { type: "plain_text", text: "Submit" },
+          close: { type: "plain_text", text: "Cancel" },
+          blocks: [
+            {
+              type: "input",
+              block_id: "alt_date",
+              label: { type: "plain_text", text: "New date" },
+              element: { type: "datepicker", action_id: "val" },
+            },
+            {
+              type: "input",
+              block_id: "alt_time",
+              label: { type: "plain_text", text: "New time (UTC)" },
+              element: {
+                type: "timepicker",
+                action_id: "val",
+              },
+            },
+          ],
+        },
+      });
+    } catch (e) {
+      logger.error("bp_suggest_alt modal failed", e);
+    }
+  });
+
+  app.view("bp_alt_modal", async ({ ack, view, client, body, logger }) => {
+    const requestId = view.private_metadata;
+    const altDate =
+      view.state.values.alt_date?.val?.selected_date || "";
+    const altTime =
+      view.state.values.alt_time?.val?.selected_time || "";
+    if (!altDate || !altTime) {
+      await ack({
+        response_action: "errors",
+        errors: {
+          ...(altDate ? {} : { alt_date: "Required" }),
+          ...(altTime ? {} : { alt_time: "Required" }),
+        },
+      });
+      return;
+    }
+    await ack();
+
+    const altIso = combineDateTimeUtc(altDate, altTime);
+    const userId = body.user.id;
+    const userInfo = await client.users.info({ user: userId });
+    const actorName =
+      userInfo.user?.real_name || userInfo.user?.name || userId;
+
+    try {
+      await transitionState({
+        requestId,
+        toState: "ALT_SUGGESTED",
+        actorId: userId,
+        actorName,
+        action: "bp_suggest_alternative",
+        metadata: { alt_date: altIso },
+        columnUpdates: { alt_date: altIso, bp_slack_id: userId },
+      });
+    } catch (e) {
+      logger.error("ALT_SUGGESTED transition failed", e);
+      return;
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: row } = await supabase
+      .from("webinar_requests")
+      .select(
+        "employee_slack_id, topic, bp_channel_id, bp_message_ts"
+      )
+      .eq("id", requestId)
+      .single();
+
+    if (row?.bp_channel_id && row.bp_message_ts) {
+      await client.chat.update({
+        channel: row.bp_channel_id,
+        ts: row.bp_message_ts,
+        text: `Alternative suggested for: ${row.topic}`,
+        blocks: [...altSuggestedNotice(altIso, actorName)],
+      });
+    }
+
+    if (row?.employee_slack_id) {
+      await client.chat.postMessage({
+        channel: row.employee_slack_id,
+        text: `BP suggested a new time for your webinar request *${row.topic}*.`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*${row.topic}*\nProposed time (UTC): \`${altIso}\``,
+            },
+          },
+          ...employeeAltDecisionBlocks(requestId),
+        ],
+      });
+    }
+  });
+}
