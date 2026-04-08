@@ -5,6 +5,14 @@ import { getSlackWeb } from "@/lib/slackWeb";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Single daily cron that handles:
+ *  1. 24-hour webinar reminders (widened to 0–26h window since we only run once/day)
+ *  2. BP SLA breaches (PENDING_APPROVAL > 6h)
+ *  3. Content SLA breaches (IN_PROGRESS, webinar < 48h, checklist incomplete)
+ *
+ * Each alert is deduped via audit_log so it fires at most once per request.
+ */
 export async function GET(req: Request) {
   const denied = verifyCronRequest(req);
   if (denied) return denied;
@@ -17,13 +25,48 @@ export async function GET(req: Request) {
   const pool = getPool();
   const slack = getSlackWeb();
 
+  // ── 1. Webinar reminders (confirmed, happening in the next 26 hours) ──
+  const { rows: reminders } = await pool.query<{
+    id: string;
+    topic: string;
+    employee_slack_id: string;
+  }>(
+    `
+    SELECT w.id, w.topic, w.employee_slack_id
+    FROM webinar_requests w
+    WHERE w.state = 'CONFIRMED'
+      AND w.requested_date >= NOW()
+      AND w.requested_date <= NOW() + INTERVAL '26 hours'
+      AND NOT EXISTS (
+        SELECT 1 FROM audit_log a
+        WHERE a.request_id = w.id AND a.action = 'cron_reminder_24h'
+      )
+    `
+  );
+
+  for (const row of reminders) {
+    try {
+      await slack.chat.postMessage({
+        channel: row.employee_slack_id,
+        text: `Reminder: your confirmed webinar *${row.topic}* is coming up in the next 24 hours.`,
+      });
+      await pool.query(
+        `INSERT INTO audit_log (request_id, actor_id, actor_name, from_state, to_state, action, metadata)
+         VALUES ($1, 'cron', 'Vercel Cron', 'CONFIRMED', 'CONFIRMED', 'cron_reminder_24h', '{}'::jsonb)`,
+        [row.id]
+      );
+    } catch (e) {
+      console.error("reminder failed", row.id, e);
+    }
+  }
+
+  // ── 2. BP SLA breaches (pending > 6 hours) ──
   const bpBreaches = await pool.query<{
     id: string;
     topic: string;
-    updated_at: Date;
   }>(
     `
-    SELECT w.id, w.topic, w.updated_at
+    SELECT w.id, w.topic
     FROM webinar_requests w
     WHERE w.state = 'PENDING_APPROVAL'
       AND w.updated_at < NOW() - INTERVAL '6 hours'
@@ -46,14 +89,14 @@ export async function GET(req: Request) {
     );
   }
 
+  // ── 3. Content SLA breaches (in-progress, < 48h away, checklist incomplete) ──
   const contentBreaches = await pool.query<{
     id: string;
     topic: string;
     growth_slack_id: string | null;
-    requested_date: Date;
   }>(
     `
-    SELECT w.id, w.topic, w.growth_slack_id, w.requested_date
+    SELECT w.id, w.topic, w.growth_slack_id
     FROM webinar_requests w
     WHERE w.state = 'IN_PROGRESS'
       AND w.requested_date < NOW() + INTERVAL '48 hours'
@@ -88,6 +131,7 @@ export async function GET(req: Request) {
 
   return Response.json({
     ok: true,
+    reminders: reminders.length,
     bpBreaches: bpBreaches.rows.length,
     contentBreaches: contentBreaches.rows.length,
   });
