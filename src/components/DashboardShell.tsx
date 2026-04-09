@@ -209,7 +209,7 @@ export function DashboardShell({ data }: { data: DashboardPayload }) {
                         </p>
                         <p className="text-xs text-zinc-500">
                           {r.trainer_name} ·{" "}
-                          {new Date(r.requested_date).toLocaleString()}
+                          {new Date(r.requested_date).toUTCString()}
                         </p>
                       </div>
                       <StatusBadge state={r.state as WebinarState} />
@@ -316,7 +316,7 @@ export function DashboardShell({ data }: { data: DashboardPayload }) {
                         {r.action.replace(/_/g, " ")}
                       </span>
                       <span className="text-zinc-500">
-                        {new Date(r.created_at).toLocaleString()}
+                        {new Date(r.created_at).toUTCString()}
                       </span>
                     </li>
                   ))}
