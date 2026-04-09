@@ -49,44 +49,46 @@ export function registerBpActions(app: App): void {
       .eq("id", requestId)
       .single();
 
-    try {
-      if (row?.bp_channel_id && row.bp_message_ts) {
-        await client.chat.update({
-          channel: row.bp_channel_id,
-          ts: row.bp_message_ts,
-          text: `Confirmed: ${row.topic}`,
-          blocks: confirmedNotice(actorName),
-        });
-      }
-    } catch (e) {
-      logger.error("Failed to update BP message after confirm", e);
-    }
-
-    try {
-      if (row?.employee_slack_id) {
-        const dm = await client.conversations.open({ users: row.employee_slack_id });
-        if (dm.channel?.id) {
-          await client.chat.postMessage({
-            channel: dm.channel.id,
-            text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will coordinate content in the Growth channel.`,
-          });
+    await Promise.all([
+      (async () => {
+        try {
+          if (row?.bp_channel_id && row.bp_message_ts) {
+            await client.chat.update({
+              channel: row.bp_channel_id,
+              ts: row.bp_message_ts,
+              text: `Confirmed: ${row.topic}`,
+              blocks: confirmedNotice(actorName),
+            });
+          }
+        } catch (e) {
+          logger.error("Failed to update BP message after confirm", e);
         }
-      }
-    } catch (e) {
-      logger.error("Failed to DM employee after confirm", e);
-    }
-
-    try {
-      await seedChecklistAndPostToGrowthChannel(
+      })(),
+      (async () => {
+        try {
+          if (row?.employee_slack_id) {
+            const dm = await client.conversations.open({ users: row.employee_slack_id });
+            if (dm.channel?.id) {
+              await client.chat.postMessage({
+                channel: dm.channel.id,
+                text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will coordinate content in the Growth channel.`,
+              });
+            }
+          }
+        } catch (e) {
+          logger.error("Failed to DM employee after confirm", e);
+        }
+      })(),
+      seedChecklistAndPostToGrowthChannel(
         client,
         requestId,
         userId,
         actorName,
         logger
-      );
-    } catch (e) {
-      logger.error("Failed to seed checklist / post Growth channel after confirm", e);
-    }
+      ).catch((e) => {
+        logger.error("Failed to seed checklist / post Growth channel after confirm", e);
+      }),
+    ]);
   });
 
   app.action("bp_reject", async ({ ack, body, client, logger }) => {

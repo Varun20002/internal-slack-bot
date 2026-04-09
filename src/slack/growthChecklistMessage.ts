@@ -13,19 +13,22 @@ export async function buildChecklistMessage(
   requestId: string
 ): Promise<{ text: string; blocks: ReturnType<typeof growthChecklistBlocks> } | null> {
   const supabase = getSupabaseAdmin();
-  const { data: row, error: reqErr } = await supabase
-    .from("webinar_requests")
-    .select("id, topic, trainer_name, requested_date, attendees_est")
-    .eq("id", requestId)
-    .maybeSingle();
+  const [reqResult, clResult] = await Promise.all([
+    supabase
+      .from("webinar_requests")
+      .select("id, topic, trainer_name, requested_date, attendees_est")
+      .eq("id", requestId)
+      .maybeSingle(),
+    supabase
+      .from("content_checklist")
+      .select("item, completed, updated_by, updated_at")
+      .eq("request_id", requestId),
+  ]);
+
+  const { data: row, error: reqErr } = reqResult;
+  const { data: checklistRows, error: clErr } = clResult;
 
   if (reqErr || !row) return null;
-
-  const { data: checklistRows, error: clErr } = await supabase
-    .from("content_checklist")
-    .select("item, completed, updated_by, updated_at")
-    .eq("request_id", requestId);
-
   if (clErr) return null;
 
   const byItem = Object.fromEntries(
