@@ -159,36 +159,43 @@ export function registerWebinarCommand(app: App): void {
       });
     } catch (e) {
       logger.error("State transition after insert failed", e);
-      return;
     }
 
-    const bpChannel = requireEnv("BP_CHANNEL_ID");
-    const posted = await client.chat.postMessage({
-      channel: bpChannel,
-      text: `Webinar request: ${topic}`,
-      blocks: bpRequestCard({
-        requestId,
-        topic,
-        trainerName: trainerName,
-        requestedDate: requestedIso,
-        attendees,
-        employeeName,
-      }),
-    });
+    try {
+      const bpChannel = requireEnv("BP_CHANNEL_ID");
+      const posted = await client.chat.postMessage({
+        channel: bpChannel,
+        text: `Webinar request: ${topic}`,
+        blocks: bpRequestCard({
+          requestId,
+          topic,
+          trainerName: trainerName,
+          requestedDate: requestedIso,
+          attendees,
+          employeeName,
+        }),
+      });
 
-    if (posted.ts && posted.channel) {
-      await supabase
-        .from("webinar_requests")
-        .update({
-          bp_channel_id: posted.channel,
-          bp_message_ts: posted.ts,
-        })
-        .eq("id", requestId);
+      if (posted.ts && posted.channel) {
+        await supabase
+          .from("webinar_requests")
+          .update({
+            bp_channel_id: posted.channel,
+            bp_message_ts: posted.ts,
+          })
+          .eq("id", requestId);
+      }
+    } catch (e) {
+      logger.error("Failed to post to BP channel", e);
     }
 
-    await client.chat.postMessage({
-      channel: userId,
-      text: `Your webinar request for *${topic}* was submitted and is pending BP review.`,
-    });
+    try {
+      await client.chat.postMessage({
+        channel: userId,
+        text: `Your webinar request for *${topic}* was submitted and is pending BP review.`,
+      });
+    } catch (e) {
+      logger.error("Failed to DM employee confirmation", e);
+    }
   });
 }
