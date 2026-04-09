@@ -60,17 +60,36 @@ export async function seedChecklistAndPostToGrowthChannel(
 
   const payload = await buildChecklistMessage(requestId);
   if (!payload) {
-    logger.error("buildChecklistMessage returned null", new Error(requestId));
+    await supabase.from("audit_log").insert({
+      request_id: requestId, actor_id: "debug", actor_name: "debug",
+      from_state: "IN_PROGRESS", to_state: "IN_PROGRESS",
+      action: "debug_growth_post_null_payload", metadata: {},
+    });
     return;
   }
 
   try {
     const growthChannel = requireEnv("GROWTH_CHANNEL_ID");
+    await supabase.from("audit_log").insert({
+      request_id: requestId, actor_id: "debug", actor_name: "debug",
+      from_state: "IN_PROGRESS", to_state: "IN_PROGRESS",
+      action: "debug_growth_post_start",
+      metadata: { channel: growthChannel, blockCount: payload.blocks.length },
+    });
+
     const g = await client.chat.postMessage({
       channel: growthChannel,
       text: payload.text,
       blocks: payload.blocks,
     });
+
+    await supabase.from("audit_log").insert({
+      request_id: requestId, actor_id: "debug", actor_name: "debug",
+      from_state: "IN_PROGRESS", to_state: "IN_PROGRESS",
+      action: "debug_growth_post_result",
+      metadata: { ok: g.ok, ts: g.ts ?? null, channel: g.channel ?? null, error: (g as { error?: string }).error ?? null },
+    });
+
     if (g.ts && g.channel) {
       await supabase
         .from("webinar_requests")
@@ -81,6 +100,16 @@ export async function seedChecklistAndPostToGrowthChannel(
         .eq("id", requestId);
     }
   } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    const errStack = e instanceof Error ? e.stack?.substring(0, 500) : undefined;
+    try {
+      await supabase.from("audit_log").insert({
+        request_id: requestId, actor_id: "debug", actor_name: "debug",
+        from_state: "IN_PROGRESS", to_state: "IN_PROGRESS",
+        action: "debug_growth_post_error",
+        metadata: { error: errMsg, stack: errStack },
+      });
+    } catch { /* swallow */ }
     logger.error("Failed to post Growth channel checklist", e);
   }
 }
