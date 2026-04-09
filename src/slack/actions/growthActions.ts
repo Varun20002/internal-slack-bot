@@ -1,11 +1,9 @@
 import type { App } from "@slack/bolt";
 import { getBlockButtonValue } from "@/slack/actionValue";
-import type { ActionsBlockElement, KnownBlock } from "@slack/types";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { transitionState } from "@/lib/stateMachine";
-import { formatWhen } from "@/slack/blockKit";
-
-const CHECKLIST_ITEMS = ["headshot", "bio", "deck", "promo_assets"] as const;
+import { growthChecklistCompletedBlocks } from "@/slack/blockKit";
+import { buildChecklistMessage } from "@/slack/growthChecklistMessage";
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -13,199 +11,7 @@ function requireEnv(name: string): string {
   return v;
 }
 
-async function buildGrowthHomeBlocks(
-  userId: string
-): Promise<KnownBlock[]> {
-  const supabase = getSupabaseAdmin();
-  const { data: sessions } = await supabase
-    .from("webinar_requests")
-    .select(
-      `
-      id,
-      topic,
-      trainer_name,
-      requested_date,
-      content_checklist ( item, completed )
-    `
-    )
-    .eq("growth_slack_id", userId)
-    .eq("state", "IN_PROGRESS");
-
-  const blocks: KnownBlock[] = [
-    {
-      type: "header",
-      text: { type: "plain_text", text: "Your webinar sessions", emoji: true },
-    },
-    {
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: "Toggle checklist items when assets are ready, then mark the session complete.",
-        },
-      ],
-    },
-  ];
-
-  if (!sessions?.length) {
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "_No sessions in progress assigned to you._",
-      },
-    });
-    return blocks;
-  }
-
-  for (const s of sessions) {
-    const cl = (s.content_checklist || []) as {
-      item: string;
-      completed: boolean;
-    }[];
-    const byItem = Object.fromEntries(cl.map((r) => [r.item, r.completed]));
-
-    blocks.push({ type: "divider" });
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*${s.topic}*\nTrainer: ${s.trainer_name}\nWhen: ${formatWhen(s.requested_date)}`,
-      },
-    });
-
-    const elements: ActionsBlockElement[] = [];
-
-    for (const item of CHECKLIST_ITEMS) {
-      const done = !!byItem[item];
-      elements.push({
-        type: "button",
-        text: {
-          type: "plain_text",
-          text: `${done ? "✅" : "⬜"} ${item}`,
-        },
-        action_id: "growth_toggle_checklist",
-        value: `${s.id}|${item}`,
-      });
-    }
-
-    const allDone = CHECKLIST_ITEMS.every((i) => byItem[i]);
-    elements.push({
-      type: "button",
-      text: { type: "plain_text", text: "Mark session complete" },
-      ...(allDone ? { style: "primary" as const } : {}),
-      action_id: "growth_mark_complete",
-      value: s.id,
-    });
-
-    blocks.push({
-      type: "actions",
-      block_id: `growth_home_${s.id}`,
-      elements,
-    });
-  }
-
-  return blocks;
-}
-
 export function registerGrowthActions(app: App): void {
-  app.event("app_home_opened", async ({ event, client, logger }) => {
-    if (event.tab !== "home") return;
-    const userId = event.user;
-    try {
-      const blocks = await buildGrowthHomeBlocks(userId);
-      await client.views.publish({
-        user_id: userId,
-        view: {
-          type: "home",
-          blocks,
-        },
-      });
-    } catch (e) {
-      logger.error("app_home_opened failed", e);
-    }
-  });
-
-  app.action("growth_pickup", async ({ ack, body, client, logger }) => {
-    await ack();
-    const requestId = getBlockButtonValue(body);
-    if (!requestId) return;
-    const userId = body.user.id;
-    const userInfo = await client.users.info({ user: userId });
-    const actorName =
-      userInfo.user?.real_name || userInfo.user?.name || userId;
-
-    try {
-      await transitionState({
-        requestId,
-        toState: "IN_PROGRESS",
-        actorId: userId,
-        actorName,
-        action: "growth_pickup",
-        columnUpdates: { growth_slack_id: userId },
-      });
-
-      const supabaseForChecklist = getSupabaseAdmin();
-      await supabaseForChecklist.rpc("seed_checklist", {
-        p_request_id: requestId,
-        p_items: [...CHECKLIST_ITEMS],
-      });
-    } catch (e) {
-      logger.error("growth_pickup failed", e);
-      return;
-    }
-
-    const supabase = getSupabaseAdmin();
-    const { data: row } = await supabase
-      .from("webinar_requests")
-      .select("*")
-      .eq("id", requestId)
-      .single();
-
-    try {
-      if (row?.growth_channel_id && row.growth_message_ts) {
-        await client.chat.update({
-          channel: row.growth_channel_id,
-          ts: row.growth_message_ts,
-          text: `Picked up: ${row.topic}`,
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: `📌 *Picked up* by <@${userId}>\n*${row.topic}* — checklist sent via DM / App Home.`,
-              },
-            },
-          ],
-        });
-      }
-    } catch (e) {
-      logger.error("Failed to update growth channel message", e);
-    }
-
-    try {
-      const dm = await client.conversations.open({ users: userId });
-      if (dm.channel?.id) {
-        await client.chat.postMessage({
-          channel: dm.channel.id,
-          text: `You picked up *${row?.topic}*. Open the app's *Home* tab to manage the content checklist.`,
-        });
-      }
-    } catch (e) {
-      logger.error("Failed to DM growth user after pickup", e);
-    }
-
-    try {
-      const blocks = await buildGrowthHomeBlocks(userId);
-      await client.views.publish({
-        user_id: userId,
-        view: { type: "home", blocks },
-      });
-    } catch (e) {
-      logger.error("refresh home after pickup failed", e);
-    }
-  });
-
   app.action("growth_toggle_checklist", async ({ ack, body, client, logger }) => {
     await ack();
     const raw = getBlockButtonValue(body);
@@ -217,13 +23,14 @@ export function registerGrowthActions(app: App): void {
     const supabase = getSupabaseAdmin();
     const { data: req } = await supabase
       .from("webinar_requests")
-      .select("growth_slack_id, state")
+      .select(
+        "state, growth_channel_id, growth_message_ts"
+      )
       .eq("id", requestId)
       .single();
 
-    if (req?.growth_slack_id !== userId || req.state !== "IN_PROGRESS") {
-      return;
-    }
+    if (req?.state !== "IN_PROGRESS") return;
+    if (!req.growth_channel_id || !req.growth_message_ts) return;
 
     const { data: row } = await supabase
       .from("content_checklist")
@@ -243,14 +50,23 @@ export function registerGrowthActions(app: App): void {
       })
       .eq("id", row.id);
 
+    await supabase
+      .from("webinar_requests")
+      .update({ growth_slack_id: userId })
+      .eq("id", requestId);
+
+    const payload = await buildChecklistMessage(requestId);
+    if (!payload) return;
+
     try {
-      const blocks = await buildGrowthHomeBlocks(userId);
-      await client.views.publish({
-        user_id: userId,
-        view: { type: "home", blocks },
+      await client.chat.update({
+        channel: req.growth_channel_id,
+        ts: req.growth_message_ts,
+        text: payload.text,
+        blocks: payload.blocks,
       });
     } catch (e) {
-      logger.error("refresh home after toggle failed", e);
+      logger.error("Failed to update Growth checklist message", e);
     }
   });
 
@@ -263,13 +79,18 @@ export function registerGrowthActions(app: App): void {
     const supabase = getSupabaseAdmin();
     const { data: req } = await supabase
       .from("webinar_requests")
-      .select("growth_slack_id, state, topic")
+      .select(
+        "state, topic, growth_channel_id, growth_message_ts"
+      )
       .eq("id", requestId)
       .single();
 
-    if (req?.growth_slack_id !== userId || req.state !== "IN_PROGRESS") {
-      return;
-    }
+    if (req?.state !== "IN_PROGRESS") return;
+
+    const channelId =
+      req.growth_channel_id ||
+      (body as { channel?: { id?: string } }).channel?.id;
+    if (!channelId) return;
 
     const { data: items } = await supabase
       .from("content_checklist")
@@ -278,10 +99,15 @@ export function registerGrowthActions(app: App): void {
 
     const incomplete = (items || []).filter((i) => !i.completed);
     if (incomplete.length > 0) {
-      await client.chat.postMessage({
-        channel: userId,
-        text: `Complete all checklist items first (${incomplete.map((i) => i.item).join(", ")} remaining).`,
-      });
+      try {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: `Complete all checklist items first (${incomplete.map((i) => i.item).join(", ")} remaining).`,
+        });
+      } catch (e) {
+        logger.error("Failed to send ephemeral for incomplete checklist", e);
+      }
       return;
     }
 
@@ -296,6 +122,7 @@ export function registerGrowthActions(app: App): void {
         actorId: userId,
         actorName,
         action: "growth_mark_complete",
+        columnUpdates: { growth_slack_id: userId },
       });
     } catch (e) {
       logger.error("growth_mark_complete transition failed", e);
@@ -303,24 +130,29 @@ export function registerGrowthActions(app: App): void {
     }
 
     const ops = requireEnv("OPS_CHANNEL_ID");
-    await client.chat.postMessage({
-      channel: ops,
-      text: `Webinar session completed: ${req.topic}`,
-    });
-
-    await client.chat.postMessage({
-      channel: userId,
-      text: `*${req.topic}* is marked *COMPLETED*. Thank you!`,
-    });
-
     try {
-      const blocks = await buildGrowthHomeBlocks(userId);
-      await client.views.publish({
-        user_id: userId,
-        view: { type: "home", blocks },
+      await client.chat.postMessage({
+        channel: ops,
+        text: `Webinar session completed: ${req.topic}`,
       });
     } catch (e) {
-      logger.error("refresh home after complete failed", e);
+      logger.error("Failed to post OPS completion notice", e);
+    }
+
+    if (req.growth_channel_id && req.growth_message_ts) {
+      try {
+        await client.chat.update({
+          channel: req.growth_channel_id,
+          ts: req.growth_message_ts,
+          text: `Completed: ${req.topic}`,
+          blocks: growthChecklistCompletedBlocks({
+            topic: req.topic || "",
+            completedBySlackId: userId,
+          }),
+        });
+      } catch (e) {
+        logger.error("Failed to replace Growth message after complete", e);
+      }
     }
   });
 }

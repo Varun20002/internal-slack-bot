@@ -2,7 +2,7 @@ import type { App } from "@slack/bolt";
 import { getBlockButtonValue } from "@/slack/actionValue";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { transitionState } from "@/lib/stateMachine";
-import { growthPickupCard } from "@/slack/blockKit";
+import { seedChecklistAndPostToGrowthChannel } from "@/slack/growthChecklistFlow";
 
 export function registerEmployeeActions(app: App): void {
   app.action("employee_accept_alt", async ({ ack, body, client, logger }) => {
@@ -72,35 +72,16 @@ export function registerEmployeeActions(app: App): void {
       });
     }
 
-    // Re-use BP confirm flow: notify growth
-    const growthChannel = process.env.GROWTH_CHANNEL_ID;
-    if (growthChannel) {
-      const { data: r2 } = await supabase
-        .from("webinar_requests")
-        .select("*")
-        .eq("id", requestId)
-        .single();
-      if (r2) {
-        const g = await client.chat.postMessage({
-          channel: growthChannel,
-          text: `Pick up webinar: ${r2.topic}`,
-          blocks: growthPickupCard({
-            requestId,
-            topic: r2.topic,
-            trainerName: r2.trainer_name,
-            requestedDate: r2.requested_date,
-          }),
-        });
-        if (g.ts && g.channel) {
-          await supabase
-            .from("webinar_requests")
-            .update({
-              growth_channel_id: g.channel,
-              growth_message_ts: g.ts,
-            })
-            .eq("id", requestId);
-        }
-      }
+    try {
+      await seedChecklistAndPostToGrowthChannel(
+        client,
+        requestId,
+        userId,
+        actorName,
+        logger
+      );
+    } catch (e) {
+      logger.error("Failed to seed checklist / post Growth after alt accept", e);
     }
   });
 

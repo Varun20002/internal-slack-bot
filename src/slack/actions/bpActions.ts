@@ -7,15 +7,9 @@ import {
   altSuggestedNotice,
   confirmedNotice,
   employeeAltDecisionBlocks,
-  growthPickupCard,
   rejectedNotice,
 } from "@/slack/blockKit";
-
-function requireEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is not configured`);
-  return v;
-}
+import { seedChecklistAndPostToGrowthChannel } from "@/slack/growthChecklistFlow";
 
 export function registerBpActions(app: App): void {
   app.action("bp_confirm", async ({ ack, body, client, logger }) => {
@@ -74,7 +68,7 @@ export function registerBpActions(app: App): void {
         if (dm.channel?.id) {
           await client.chat.postMessage({
             channel: dm.channel.id,
-            text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will pick it up shortly.`,
+            text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will coordinate content in the Growth channel.`,
           });
         }
       }
@@ -83,29 +77,15 @@ export function registerBpActions(app: App): void {
     }
 
     try {
-      const growthChannel = requireEnv("GROWTH_CHANNEL_ID");
-      const g = await client.chat.postMessage({
-        channel: growthChannel,
-        text: `Pick up webinar: ${row?.topic}`,
-        blocks: growthPickupCard({
-          requestId,
-          topic: row?.topic || "",
-          trainerName: row?.trainer_name || "",
-          requestedDate: row?.requested_date || "",
-        }),
-      });
-
-      if (g.ts && g.channel) {
-        await supabase
-          .from("webinar_requests")
-          .update({
-            growth_channel_id: g.channel,
-            growth_message_ts: g.ts,
-          })
-          .eq("id", requestId);
-      }
+      await seedChecklistAndPostToGrowthChannel(
+        client,
+        requestId,
+        userId,
+        actorName,
+        logger
+      );
     } catch (e) {
-      logger.error("Failed to post to Growth channel after confirm", e);
+      logger.error("Failed to seed checklist / post Growth channel after confirm", e);
     }
   });
 

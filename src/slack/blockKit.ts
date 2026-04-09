@@ -1,4 +1,4 @@
-import type { KnownBlock } from "@slack/types";
+import type { ActionsBlockElement, KnownBlock } from "@slack/types";
 
 export function formatWhen(iso: string): string {
   try {
@@ -72,17 +72,103 @@ export function bpRequestCard(params: {
   ];
 }
 
-export function growthPickupCard(params: {
+/** Canonical Growth content checklist keys (order matters for UI). */
+export const GROWTH_CHECKLIST_ITEM_KEYS = [
+  "headshot",
+  "bio",
+  "deck",
+  "promo_assets",
+] as const;
+
+export type GrowthChecklistItemKey = (typeof GROWTH_CHECKLIST_ITEM_KEYS)[number];
+
+const CHECKLIST_ITEM_LABEL: Record<GrowthChecklistItemKey, string> = {
+  headshot: "Headshot",
+  bio: "Bio",
+  deck: "Deck",
+  promo_assets: "Promo assets",
+};
+
+export type GrowthChecklistItemState = {
+  item: string;
+  completed: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+/**
+ * Interactive checklist for the Growth channel. `block_id` embeds `requestId`
+ * so handlers can route actions.
+ */
+export function growthChecklistBlocks(params: {
   requestId: string;
   topic: string;
   trainerName: string;
   requestedDate: string;
+  attendeesEst: number;
+  items: GrowthChecklistItemState[];
 }): KnownBlock[] {
-  const { requestId, topic, trainerName, requestedDate } = params;
-  return [
+  const {
+    requestId,
+    topic,
+    trainerName,
+    requestedDate,
+    attendeesEst,
+    items,
+  } = params;
+
+  const byItem = Object.fromEntries(
+    items.map((r) => [r.item, r] as const)
+  ) as Record<string, GrowthChecklistItemState | undefined>;
+
+  let lastUpdatedBy: string | null = null;
+  let lastUpdatedAtMs = 0;
+  for (const r of items) {
+    if (r.updatedBy && r.updatedAt) {
+      const t = Date.parse(r.updatedAt);
+      if (!Number.isNaN(t) && t >= lastUpdatedAtMs) {
+        lastUpdatedAtMs = t;
+        lastUpdatedBy = r.updatedBy;
+      }
+    }
+  }
+
+  const elements: ActionsBlockElement[] = [];
+
+  for (const key of GROWTH_CHECKLIST_ITEM_KEYS) {
+    const row = byItem[key];
+    const done = !!row?.completed;
+    elements.push({
+      type: "button",
+      text: {
+        type: "plain_text",
+        text: `${done ? "✅" : "⬜"} ${CHECKLIST_ITEM_LABEL[key]}`,
+      },
+      action_id: "growth_toggle_checklist",
+      value: `${requestId}|${key}`,
+    });
+  }
+
+  const allDone = GROWTH_CHECKLIST_ITEM_KEYS.every(
+    (k) => byItem[k]?.completed
+  );
+
+  elements.push({
+    type: "button",
+    text: { type: "plain_text", text: "Mark complete" },
+    ...(allDone ? { style: "primary" as const } : {}),
+    action_id: "growth_mark_complete",
+    value: requestId,
+  });
+
+  const blocks: KnownBlock[] = [
     {
       type: "header",
-      text: { type: "plain_text", text: "Confirmed webinar — pick up", emoji: true },
+      text: {
+        type: "plain_text",
+        text: "Webinar content checklist",
+        emoji: true,
+      },
     },
     {
       type: "section",
@@ -93,21 +179,53 @@ export function growthPickupCard(params: {
           type: "mrkdwn",
           text: `*Scheduled*\n${formatWhen(requestedDate)}`,
         },
-        { type: "mrkdwn", text: `*ID*\n\`${requestId}\`` },
+        { type: "mrkdwn", text: `*Est. attendees*\n${attendeesEst}` },
+        { type: "mrkdwn", text: `*Request ID*\n\`${requestId}\`` },
+      ],
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Toggle items as assets are ready. Anyone on the team can update this checklist.",
+        },
       ],
     },
     {
       type: "actions",
-      block_id: `growth_pick_${requestId}`,
+      block_id: `growth_cl_${requestId}`,
+      elements,
+    },
+  ];
+
+  if (lastUpdatedBy) {
+    blocks.push({
+      type: "context",
       elements: [
         {
-          type: "button",
-          text: { type: "plain_text", text: "Pick up this session" },
-          style: "primary",
-          action_id: "growth_pickup",
-          value: requestId,
+          type: "mrkdwn",
+          text: `Last updated by <@${lastUpdatedBy}>`,
         },
       ],
+    });
+  }
+
+  return blocks;
+}
+
+export function growthChecklistCompletedBlocks(params: {
+  topic: string;
+  completedBySlackId: string;
+}): KnownBlock[] {
+  const { topic, completedBySlackId } = params;
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `✅ *Content complete* — *${topic}*\nMarked complete by <@${completedBySlackId}>.`,
+      },
     },
   ];
 }

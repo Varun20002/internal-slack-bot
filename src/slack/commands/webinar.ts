@@ -189,29 +189,16 @@ export function registerWebinarCommand(app: App): void {
       logger.error("Failed to post to BP channel", e);
     }
 
-    // #region agent log — DM diagnostic
     try {
-      await supabase.from("audit_log").insert({ request_id: requestId, actor_id: "debug", actor_name: "debug", from_state: "PENDING_APPROVAL", to_state: "PENDING_APPROVAL", action: "debug_dm_start", metadata: { userId, step: "before_conversations_open" } });
-
       const dm = await client.conversations.open({ users: userId });
-
-      await supabase.from("audit_log").insert({ request_id: requestId, actor_id: "debug", actor_name: "debug", from_state: "PENDING_APPROVAL", to_state: "PENDING_APPROVAL", action: "debug_dm_open_result", metadata: { ok: dm.ok, channelId: dm.channel?.id ?? null, error: (dm as { error?: string }).error ?? null } });
-
       if (dm.channel?.id) {
-        const msgResult = await client.chat.postMessage({
+        await client.chat.postMessage({
           channel: dm.channel.id,
           text: `Your webinar request for *${topic}* was submitted and is pending BP review.`,
         });
-
-        await supabase.from("audit_log").insert({ request_id: requestId, actor_id: "debug", actor_name: "debug", from_state: "PENDING_APPROVAL", to_state: "PENDING_APPROVAL", action: "debug_dm_post_result", metadata: { ok: msgResult.ok, ts: msgResult.ts ?? null, error: (msgResult as { error?: string }).error ?? null } });
-      } else {
-        await supabase.from("audit_log").insert({ request_id: requestId, actor_id: "debug", actor_name: "debug", from_state: "PENDING_APPROVAL", to_state: "PENDING_APPROVAL", action: "debug_dm_no_channel", metadata: { dm: JSON.stringify(dm).substring(0, 500) } });
       }
     } catch (e) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      try { await supabase.from("audit_log").insert({ request_id: requestId, actor_id: "debug", actor_name: "debug", from_state: "PENDING_APPROVAL", to_state: "PENDING_APPROVAL", action: "debug_dm_error", metadata: { error: errMsg } }); } catch { /* ignore */ }
       logger.error("Failed to DM employee confirmation", e);
     }
-    // #endregion
   });
 }
