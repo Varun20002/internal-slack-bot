@@ -162,27 +162,38 @@ export function registerGrowthActions(app: App): void {
       .eq("id", requestId)
       .single();
 
-    if (row?.growth_channel_id && row.growth_message_ts) {
-      await client.chat.update({
-        channel: row.growth_channel_id,
-        ts: row.growth_message_ts,
-        text: `Picked up: ${row.topic}`,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `📌 *Picked up* by <@${userId}>\n*${row.topic}* — checklist sent via DM / App Home.`,
+    try {
+      if (row?.growth_channel_id && row.growth_message_ts) {
+        await client.chat.update({
+          channel: row.growth_channel_id,
+          ts: row.growth_message_ts,
+          text: `Picked up: ${row.topic}`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `📌 *Picked up* by <@${userId}>\n*${row.topic}* — checklist sent via DM / App Home.`,
+              },
             },
-          },
-        ],
-      });
+          ],
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to update growth channel message", e);
     }
 
-    await client.chat.postMessage({
-      channel: userId,
-      text: `You picked up *${row?.topic}*. Open the app's *Home* tab to manage the content checklist.`,
-    });
+    try {
+      const dm = await client.conversations.open({ users: userId });
+      if (dm.channel?.id) {
+        await client.chat.postMessage({
+          channel: dm.channel.id,
+          text: `You picked up *${row?.topic}*. Open the app's *Home* tab to manage the content checklist.`,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to DM growth user after pickup", e);
+    }
 
     try {
       const blocks = await buildGrowthHomeBlocks(userId);

@@ -190,10 +190,13 @@ export function registerWebinarCommand(app: App): void {
     }
 
     try {
-      await client.chat.postMessage({
-        channel: userId,
-        text: `Your webinar request for *${topic}* was submitted and is pending BP review.`,
-      });
+      const dm = await client.conversations.open({ users: userId });
+      if (dm.channel?.id) {
+        await client.chat.postMessage({
+          channel: dm.channel.id,
+          text: `Your webinar request for *${topic}* was submitted and is pending BP review.`,
+        });
+      }
     } catch (e) {
       logger.error("Failed to DM employee confirmation", e);
     }

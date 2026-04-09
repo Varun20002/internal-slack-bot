@@ -70,10 +70,13 @@ export function registerBpActions(app: App): void {
 
     try {
       if (row?.employee_slack_id) {
-        await client.chat.postMessage({
-          channel: row.employee_slack_id,
-          text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will pick it up shortly.`,
-        });
+        const dm = await client.conversations.open({ users: row.employee_slack_id });
+        if (dm.channel?.id) {
+          await client.chat.postMessage({
+            channel: dm.channel.id,
+            text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will pick it up shortly.`,
+          });
+        }
       }
     } catch (e) {
       logger.error("Failed to DM employee after confirm", e);
