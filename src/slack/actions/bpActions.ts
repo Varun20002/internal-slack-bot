@@ -38,6 +38,13 @@ export function registerBpActions(app: App): void {
       });
     } catch (e) {
       logger.error("bp_confirm failed", e);
+      try {
+        await client.chat.postEphemeral({
+          channel: (body as { channel?: { id: string } }).channel?.id || userId,
+          user: userId,
+          text: `Could not confirm this request. It may already be processed or in an unexpected state. Error: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      } catch { /* best effort */ }
       return;
     }
 
@@ -48,42 +55,54 @@ export function registerBpActions(app: App): void {
       .eq("id", requestId)
       .single();
 
-    if (row?.bp_channel_id && row.bp_message_ts) {
-      await client.chat.update({
-        channel: row.bp_channel_id,
-        ts: row.bp_message_ts,
-        text: `Confirmed: ${row.topic}`,
-        blocks: confirmedNotice(actorName),
-      });
+    try {
+      if (row?.bp_channel_id && row.bp_message_ts) {
+        await client.chat.update({
+          channel: row.bp_channel_id,
+          ts: row.bp_message_ts,
+          text: `Confirmed: ${row.topic}`,
+          blocks: confirmedNotice(actorName),
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to update BP message after confirm", e);
     }
 
-    if (row?.employee_slack_id) {
-      await client.chat.postMessage({
-        channel: row.employee_slack_id,
-        text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will pick it up shortly.`,
-      });
+    try {
+      if (row?.employee_slack_id) {
+        await client.chat.postMessage({
+          channel: row.employee_slack_id,
+          text: `Your webinar request *${row.topic}* was *confirmed*. The Growth team will pick it up shortly.`,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to DM employee after confirm", e);
     }
 
-    const growthChannel = requireEnv("GROWTH_CHANNEL_ID");
-    const g = await client.chat.postMessage({
-      channel: growthChannel,
-      text: `Pick up webinar: ${row?.topic}`,
-      blocks: growthPickupCard({
-        requestId,
-        topic: row?.topic || "",
-        trainerName: row?.trainer_name || "",
-        requestedDate: row?.requested_date || "",
-      }),
-    });
+    try {
+      const growthChannel = requireEnv("GROWTH_CHANNEL_ID");
+      const g = await client.chat.postMessage({
+        channel: growthChannel,
+        text: `Pick up webinar: ${row?.topic}`,
+        blocks: growthPickupCard({
+          requestId,
+          topic: row?.topic || "",
+          trainerName: row?.trainer_name || "",
+          requestedDate: row?.requested_date || "",
+        }),
+      });
 
-    if (g.ts && g.channel) {
-      await supabase
-        .from("webinar_requests")
-        .update({
-          growth_channel_id: g.channel,
-          growth_message_ts: g.ts,
-        })
-        .eq("id", requestId);
+      if (g.ts && g.channel) {
+        await supabase
+          .from("webinar_requests")
+          .update({
+            growth_channel_id: g.channel,
+            growth_message_ts: g.ts,
+          })
+          .eq("id", requestId);
+      }
+    } catch (e) {
+      logger.error("Failed to post to Growth channel after confirm", e);
     }
   });
 
@@ -155,6 +174,12 @@ export function registerBpActions(app: App): void {
       });
     } catch (e) {
       logger.error("bp_reject transition failed", e);
+      try {
+        await client.chat.postMessage({
+          channel: userId,
+          text: `Could not reject this request. Error: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      } catch { /* best effort */ }
       return;
     }
 
@@ -165,20 +190,28 @@ export function registerBpActions(app: App): void {
       .eq("id", requestId)
       .single();
 
-    if (row?.bp_channel_id && row.bp_message_ts) {
-      await client.chat.update({
-        channel: row.bp_channel_id,
-        ts: row.bp_message_ts,
-        text: `Rejected: ${row.topic}`,
-        blocks: rejectedNotice(reason, actorName),
-      });
+    try {
+      if (row?.bp_channel_id && row.bp_message_ts) {
+        await client.chat.update({
+          channel: row.bp_channel_id,
+          ts: row.bp_message_ts,
+          text: `Rejected: ${row.topic}`,
+          blocks: rejectedNotice(reason, actorName),
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to update BP message after reject", e);
     }
 
-    if (row?.employee_slack_id) {
-      await client.chat.postMessage({
-        channel: row.employee_slack_id,
-        text: `Your webinar request *${row.topic}* was rejected.\n*Reason:* ${reason}`,
-      });
+    try {
+      if (row?.employee_slack_id) {
+        await client.chat.postMessage({
+          channel: row.employee_slack_id,
+          text: `Your webinar request *${row.topic}* was rejected.\n*Reason:* ${reason}`,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to DM employee after reject", e);
     }
   });
 
@@ -256,6 +289,12 @@ export function registerBpActions(app: App): void {
       });
     } catch (e) {
       logger.error("ALT_SUGGESTED transition failed", e);
+      try {
+        await client.chat.postMessage({
+          channel: userId,
+          text: `Could not suggest alternative. Error: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      } catch { /* best effort */ }
       return;
     }
 
@@ -268,30 +307,38 @@ export function registerBpActions(app: App): void {
       .eq("id", requestId)
       .single();
 
-    if (row?.bp_channel_id && row.bp_message_ts) {
-      await client.chat.update({
-        channel: row.bp_channel_id,
-        ts: row.bp_message_ts,
-        text: `Alternative suggested for: ${row.topic}`,
-        blocks: [...altSuggestedNotice(altIso, actorName)],
-      });
+    try {
+      if (row?.bp_channel_id && row.bp_message_ts) {
+        await client.chat.update({
+          channel: row.bp_channel_id,
+          ts: row.bp_message_ts,
+          text: `Alternative suggested for: ${row.topic}`,
+          blocks: [...altSuggestedNotice(altIso, actorName)],
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to update BP message after alt suggest", e);
     }
 
-    if (row?.employee_slack_id) {
-      await client.chat.postMessage({
-        channel: row.employee_slack_id,
-        text: `BP suggested a new time for your webinar request *${row.topic}*.`,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `*${row.topic}*\nProposed time (UTC): \`${altIso}\``,
+    try {
+      if (row?.employee_slack_id) {
+        await client.chat.postMessage({
+          channel: row.employee_slack_id,
+          text: `BP suggested a new time for your webinar request *${row.topic}*.`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*${row.topic}*\nProposed time (UTC): \`${altIso}\``,
+              },
             },
-          },
-          ...employeeAltDecisionBlocks(requestId),
-        ],
-      });
+            ...employeeAltDecisionBlocks(requestId),
+          ],
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to DM employee after alt suggest", e);
     }
   });
 }
