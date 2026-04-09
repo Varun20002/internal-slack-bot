@@ -1,4 +1,4 @@
-import { getPool } from "@/lib/db";
+import { getSupabaseAdmin } from "@/lib/supabase";
 import { verifyCronRequest } from "@/lib/cronAuth";
 import { getSlackWeb } from "@/lib/slackWeb";
 
@@ -14,40 +14,29 @@ export async function GET(req: Request) {
     return new Response("OPS_CHANNEL_ID missing", { status: 500 });
   }
 
-  const pool = getPool();
+  const supabase = getSupabaseAdmin();
   const slack = getSlackWeb();
 
-  const { rows: summary } = await pool.query<{
-    total: string;
-    confirmed: string;
-    rejected: string;
-    completed: string;
-  }>(
-    `
-    SELECT
-      COUNT(*)::text AS total,
-      COUNT(*) FILTER (WHERE state = 'CONFIRMED')::text AS confirmed,
-      COUNT(*) FILTER (WHERE state = 'REJECTED')::text AS rejected,
-      COUNT(*) FILTER (WHERE state = 'COMPLETED')::text AS completed
-    FROM webinar_requests
-    WHERE created_at >= NOW() - INTERVAL '7 days'
-    `
-  );
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { rows: sla } = await pool.query<{ n: string }>(
-    `
-    SELECT COUNT(*)::text AS n FROM audit_log
-    WHERE action IN ('sla_bp_breach', 'sla_content_breach')
-      AND created_at >= NOW() - INTERVAL '7 days'
-    `
-  );
+  const { data: requests } = await supabase
+    .from("webinar_requests")
+    .select("state")
+    .gte("created_at", weekAgo);
 
-  const s = summary[0] || {
-    total: "0",
-    confirmed: "0",
-    rejected: "0",
-    completed: "0",
+  const all = requests ?? [];
+  const s = {
+    total: String(all.length),
+    confirmed: String(all.filter((r) => r.state === "CONFIRMED").length),
+    rejected: String(all.filter((r) => r.state === "REJECTED").length),
+    completed: String(all.filter((r) => r.state === "COMPLETED").length),
   };
+
+  const { count: slaCount } = await supabase
+    .from("audit_log")
+    .select("id", { count: "exact", head: true })
+    .in("action", ["sla_bp_breach", "sla_content_breach"])
+    .gte("created_at", weekAgo);
 
   await slack.chat.postMessage({
     channel: opsChannel,
@@ -66,7 +55,7 @@ export async function GET(req: Request) {
           { type: "mrkdwn", text: `*Completed*\n${s.completed}` },
           {
             type: "mrkdwn",
-            text: `*SLA alerts fired*\n${sla[0]?.n ?? "0"}`,
+            text: `*SLA alerts fired*\n${slaCount ?? 0}`,
           },
         ],
       },

@@ -1,18 +1,5 @@
-import type { PoolClient } from "pg";
-import { withTransaction } from "@/lib/db";
-import { VALID_TRANSITIONS, type WebinarState } from "@/lib/types";
-
-const ALLOWED_COLUMN_PATCHES = new Set<string>([
-  "bp_slack_id",
-  "growth_slack_id",
-  "rejection_reason",
-  "alt_date",
-  "requested_date",
-  "bp_channel_id",
-  "bp_message_ts",
-  "growth_channel_id",
-  "growth_message_ts",
-]);
+import { getSupabaseAdmin } from "@/lib/supabase";
+import type { WebinarState } from "@/lib/types";
 
 export type ColumnPatch = Partial<{
   bp_slack_id: string | null;
@@ -34,8 +21,6 @@ export type TransitionStateParams = {
   action: string;
   metadata?: Record<string, unknown>;
   columnUpdates?: ColumnPatch;
-  /** Runs in the same transaction after state update + audit insert */
-  sideEffects?: (client: PoolClient) => Promise<void>;
 };
 
 export class InvalidTransitionError extends Error {
@@ -48,6 +33,11 @@ export class InvalidTransitionError extends Error {
   }
 }
 
+/**
+ * Calls the `transition_state` PostgreSQL function via Supabase RPC.
+ * The function runs atomically inside a transaction with FOR UPDATE locking.
+ * This avoids needing a direct Postgres connection (DATABASE_URL).
+ */
 export async function transitionState(
   params: TransitionStateParams
 ): Promise<{ previousState: WebinarState; newState: WebinarState }> {
@@ -59,60 +49,33 @@ export async function transitionState(
     action,
     metadata = {},
     columnUpdates = {},
-    sideEffects,
   } = params;
 
-  return withTransaction(async (client) => {
-    const lock = await client.query<{ state: string }>(
-      `SELECT state FROM webinar_requests WHERE id = $1 FOR UPDATE`,
-      [requestId]
-    );
-    if (lock.rowCount === 0) {
-      throw new Error(`webinar_requests not found: ${requestId}`);
-    }
-    const fromState = lock.rows[0].state as WebinarState;
+  const supabase = getSupabaseAdmin();
 
-    const allowed = VALID_TRANSITIONS[fromState];
-    if (!allowed.includes(toState)) {
-      throw new InvalidTransitionError(fromState, toState);
-    }
-
-    const patchEntries = Object.entries(columnUpdates).filter(
-      ([k, v]) => ALLOWED_COLUMN_PATCHES.has(k) && v !== undefined
-    );
-
-    const setFragments: string[] = ["state = $2", "updated_at = now()"];
-    const values: unknown[] = [requestId, toState];
-    let i = 3;
-    for (const [col, val] of patchEntries) {
-      setFragments.push(`${col} = $${i}`);
-      values.push(val);
-      i += 1;
-    }
-
-    await client.query(
-      `UPDATE webinar_requests SET ${setFragments.join(", ")} WHERE id = $1`,
-      values
-    );
-
-    await client.query(
-      `INSERT INTO audit_log (request_id, actor_id, actor_name, from_state, to_state, action, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
-      [
-        requestId,
-        actorId,
-        actorName,
-        fromState,
-        toState,
-        action,
-        JSON.stringify(metadata),
-      ]
-    );
-
-    if (sideEffects) {
-      await sideEffects(client);
-    }
-
-    return { previousState: fromState, newState: toState };
+  const { data, error } = await supabase.rpc("transition_state", {
+    p_request_id: requestId,
+    p_to_state: toState,
+    p_actor_id: actorId,
+    p_actor_name: actorName,
+    p_action: action,
+    p_metadata: metadata,
+    p_column_updates: columnUpdates,
   });
+
+  if (error) {
+    if (error.message.includes("Invalid transition")) {
+      const match = error.message.match(/Invalid transition: (\S+) → (\S+)/);
+      throw new InvalidTransitionError(
+        match?.[1] ?? "UNKNOWN",
+        match?.[2] ?? toState
+      );
+    }
+    throw new Error(error.message);
+  }
+
+  return {
+    previousState: (data as { previousState: string }).previousState as WebinarState,
+    newState: (data as { newState: string }).newState as WebinarState,
+  };
 }

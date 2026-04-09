@@ -143,14 +143,12 @@ export function registerGrowthActions(app: App): void {
         actorName,
         action: "growth_pickup",
         columnUpdates: { growth_slack_id: userId },
-        sideEffects: async (c) => {
-          for (const item of CHECKLIST_ITEMS) {
-            await c.query(
-              `INSERT INTO content_checklist (request_id, item) VALUES ($1, $2)`,
-              [requestId, item]
-            );
-          }
-        },
+      });
+
+      const supabaseForChecklist = getSupabaseAdmin();
+      await supabaseForChecklist.rpc("seed_checklist", {
+        p_request_id: requestId,
+        p_items: [...CHECKLIST_ITEMS],
       });
     } catch (e) {
       logger.error("growth_pickup failed", e);

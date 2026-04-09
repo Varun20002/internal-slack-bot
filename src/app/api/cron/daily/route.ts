@@ -1,4 +1,4 @@
-import { getPool } from "@/lib/db";
+import { getSupabaseAdmin } from "@/lib/supabase";
 import { verifyCronRequest } from "@/lib/cronAuth";
 import { getSlackWeb } from "@/lib/slackWeb";
 
@@ -22,96 +22,55 @@ export async function GET(req: Request) {
     return new Response("OPS_CHANNEL_ID missing", { status: 500 });
   }
 
-  const pool = getPool();
+  const supabase = getSupabaseAdmin();
   const slack = getSlackWeb();
 
   // ── 1. Webinar reminders (confirmed, happening in the next 26 hours) ──
-  const { rows: reminders } = await pool.query<{
-    id: string;
-    topic: string;
-    employee_slack_id: string;
-  }>(
-    `
-    SELECT w.id, w.topic, w.employee_slack_id
-    FROM webinar_requests w
-    WHERE w.state = 'CONFIRMED'
-      AND w.requested_date >= NOW()
-      AND w.requested_date <= NOW() + INTERVAL '26 hours'
-      AND NOT EXISTS (
-        SELECT 1 FROM audit_log a
-        WHERE a.request_id = w.id AND a.action = 'cron_reminder_24h'
-      )
-    `
-  );
+  const { data: reminders } = await supabase.rpc("get_pending_reminders");
 
-  for (const row of reminders) {
+  for (const row of reminders ?? []) {
     try {
       await slack.chat.postMessage({
         channel: row.employee_slack_id,
         text: `Reminder: your confirmed webinar *${row.topic}* is coming up in the next 24 hours.`,
       });
-      await pool.query(
-        `INSERT INTO audit_log (request_id, actor_id, actor_name, from_state, to_state, action, metadata)
-         VALUES ($1, 'cron', 'Vercel Cron', 'CONFIRMED', 'CONFIRMED', 'cron_reminder_24h', '{}'::jsonb)`,
-        [row.id]
-      );
+      await supabase.from("audit_log").insert({
+        request_id: row.id,
+        actor_id: "cron",
+        actor_name: "Vercel Cron",
+        from_state: "CONFIRMED",
+        to_state: "CONFIRMED",
+        action: "cron_reminder_24h",
+        metadata: {},
+      });
     } catch (e) {
       console.error("reminder failed", row.id, e);
     }
   }
 
   // ── 2. BP SLA breaches (pending > 6 hours) ──
-  const bpBreaches = await pool.query<{
-    id: string;
-    topic: string;
-  }>(
-    `
-    SELECT w.id, w.topic
-    FROM webinar_requests w
-    WHERE w.state = 'PENDING_APPROVAL'
-      AND w.updated_at < NOW() - INTERVAL '6 hours'
-      AND NOT EXISTS (
-        SELECT 1 FROM audit_log a
-        WHERE a.request_id = w.id AND a.action = 'sla_bp_breach'
-      )
-    `
-  );
+  const { data: bpBreaches } = await supabase.rpc("get_bp_sla_breaches");
 
-  for (const row of bpBreaches.rows) {
+  for (const row of bpBreaches ?? []) {
     await slack.chat.postMessage({
       channel: opsChannel,
       text: `SLA: BP review pending >6h for *${row.topic}* (\`${row.id}\`).`,
     });
-    await pool.query(
-      `INSERT INTO audit_log (request_id, actor_id, actor_name, from_state, to_state, action, metadata)
-       VALUES ($1, 'cron', 'Vercel Cron', 'PENDING_APPROVAL', 'PENDING_APPROVAL', 'sla_bp_breach', '{}'::jsonb)`,
-      [row.id]
-    );
+    await supabase.from("audit_log").insert({
+      request_id: row.id,
+      actor_id: "cron",
+      actor_name: "Vercel Cron",
+      from_state: "PENDING_APPROVAL",
+      to_state: "PENDING_APPROVAL",
+      action: "sla_bp_breach",
+      metadata: {},
+    });
   }
 
   // ── 3. Content SLA breaches (in-progress, < 48h away, checklist incomplete) ──
-  const contentBreaches = await pool.query<{
-    id: string;
-    topic: string;
-    growth_slack_id: string | null;
-  }>(
-    `
-    SELECT w.id, w.topic, w.growth_slack_id
-    FROM webinar_requests w
-    WHERE w.state = 'IN_PROGRESS'
-      AND w.requested_date < NOW() + INTERVAL '48 hours'
-      AND EXISTS (
-        SELECT 1 FROM content_checklist c
-        WHERE c.request_id = w.id AND c.completed = false
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM audit_log a
-        WHERE a.request_id = w.id AND a.action = 'sla_content_breach'
-      )
-    `
-  );
+  const { data: contentBreaches } = await supabase.rpc("get_content_sla_breaches");
 
-  for (const row of contentBreaches.rows) {
+  for (const row of contentBreaches ?? []) {
     await slack.chat.postMessage({
       channel: opsChannel,
       text: `SLA: Content incomplete for *${row.topic}* (\`${row.id}\`) — webinar in <48h.`,
@@ -122,17 +81,21 @@ export async function GET(req: Request) {
         text: `Heads up: *${row.topic}* is less than 48 hours away and the content checklist is incomplete.`,
       });
     }
-    await pool.query(
-      `INSERT INTO audit_log (request_id, actor_id, actor_name, from_state, to_state, action, metadata)
-       VALUES ($1, 'cron', 'Vercel Cron', 'IN_PROGRESS', 'IN_PROGRESS', 'sla_content_breach', '{}'::jsonb)`,
-      [row.id]
-    );
+    await supabase.from("audit_log").insert({
+      request_id: row.id,
+      actor_id: "cron",
+      actor_name: "Vercel Cron",
+      from_state: "IN_PROGRESS",
+      to_state: "IN_PROGRESS",
+      action: "sla_content_breach",
+      metadata: {},
+    });
   }
 
   return Response.json({
     ok: true,
-    reminders: reminders.length,
-    bpBreaches: bpBreaches.rows.length,
-    contentBreaches: contentBreaches.rows.length,
+    reminders: (reminders ?? []).length,
+    bpBreaches: (bpBreaches ?? []).length,
+    contentBreaches: (contentBreaches ?? []).length,
   });
 }
