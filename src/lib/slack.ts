@@ -27,7 +27,7 @@ function buildApp(): App {
   const app = new App({
     token,
     signingSecret,
-    processBeforeResponse: true,
+    processBeforeResponse: false,
     receiver: noopReceiver,
     logLevel: LogLevel.INFO,
   });

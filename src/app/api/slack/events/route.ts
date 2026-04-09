@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import querystring from "node:querystring";
+import { after } from "next/server";
 import { getSlackApp } from "@/lib/slack";
 
 export const runtime = "nodejs";
@@ -80,8 +81,12 @@ export async function POST(req: Request) {
   const app = await getSlackApp();
 
   let responseBody: string | undefined;
+  let resolveAck: () => void;
+  const ackReady = new Promise<void>((r) => {
+    resolveAck = r;
+  });
 
-  await app.processEvent({
+  const processing = app.processEvent({
     body,
     ack: async (response) => {
       if (response === undefined || response === null) {
@@ -91,9 +96,21 @@ export async function POST(req: Request) {
       } else {
         responseBody = JSON.stringify(response);
       }
+      resolveAck!();
     },
     retryNum: Number(req.headers.get("x-slack-retry-num")) || undefined,
     retryReason: req.headers.get("x-slack-retry-reason") || undefined,
+  });
+
+  const timeout = new Promise<void>((r) => setTimeout(r, 8000));
+  await Promise.race([ackReady, timeout]);
+
+  after(async () => {
+    try {
+      await processing;
+    } catch (e) {
+      console.error("Bolt processEvent error (after):", e);
+    }
   });
 
   if (responseBody !== undefined && responseBody !== "") {
