@@ -25,13 +25,24 @@ export async function seedChecklistAndPostToGrowthChannel(
 ): Promise<void> {
   const supabase = getSupabaseAdmin();
 
-  const { error: seedErr } = await supabase.rpc("seed_checklist", {
-    p_request_id: requestId,
-    p_items: [...GROWTH_CHECKLIST_ITEM_KEYS],
-  });
-  if (seedErr) {
-    logger.error("seed_checklist failed", seedErr);
-    return;
+  const { count: existing } = await supabase
+    .from("content_checklist")
+    .select("id", { count: "exact", head: true })
+    .eq("request_id", requestId);
+
+  if (!existing) {
+    const rows = GROWTH_CHECKLIST_ITEM_KEYS.map((item) => ({
+      request_id: requestId,
+      item,
+      completed: false,
+    }));
+    const { error: seedErr } = await supabase
+      .from("content_checklist")
+      .insert(rows);
+    if (seedErr) {
+      logger.error("seed_checklist insert failed", seedErr);
+      return;
+    }
   }
 
   try {
