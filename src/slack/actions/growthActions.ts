@@ -12,7 +12,7 @@ function requireEnv(name: string): string {
 }
 
 export function registerGrowthActions(app: App): void {
-  app.action("growth_toggle_checklist", async ({ ack, body, client, logger }) => {
+  app.action(/^growth_toggle_checklist_/, async ({ ack, body, client, logger }) => {
     await ack();
     const raw = getBlockButtonValue(body);
     if (!raw) return;

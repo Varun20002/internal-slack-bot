@@ -144,7 +144,7 @@ export function growthChecklistBlocks(params: {
         type: "plain_text",
         text: `${done ? "✅" : "⬜"} ${CHECKLIST_ITEM_LABEL[key]}`,
       },
-      action_id: "growth_toggle_checklist",
+      action_id: `growth_toggle_checklist_${key}`,
       value: `${requestId}|${key}`,
     });
   }

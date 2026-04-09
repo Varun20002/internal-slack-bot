@@ -77,6 +77,12 @@ export async function POST(req: Request) {
     return Response.json({ challenge: body.challenge });
   }
 
+  // --- Skip Slack retries to avoid duplicate processing ---
+  const retryNum = req.headers.get("x-slack-retry-num");
+  if (retryNum) {
+    return new Response("", { status: 200 });
+  }
+
   // --- Dispatch to Bolt ---
   const app = await getSlackApp();
 
