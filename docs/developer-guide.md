@@ -492,13 +492,18 @@ All dates use `toUTCString()` (not `toLocaleString()`) to avoid hydration mismat
 | `commands` | Register slash commands |
 | `users:read` | Look up user display names |
 | `im:write` | Open DM conversations with users |
+| `im:read` | Read DM channel metadata for reliable delivery |
+| `files:read` | Access file metadata when users share assets |
+| `files:write` | Upload files (future: Growth team asset management) |
 
 ### Manifest (`slack-manifest.yml`)
 
-- **Slash command:** `/webinar` pointing to `/api/slack/events`
+- **Slash command:** `/webinar` pointing to `https://internal-slack-bot-pi.vercel.app/api/slack/events`
 - **Interactivity:** Enabled, same request URL
 - **App Home:** Home tab enabled, messages tab enabled
 - **Bot events:** None (no passive event subscriptions needed)
+
+See `docs/admin-approval.md` for a full breakdown of each scope with justification, intended for workspace admin review.
 
 ### Channel Setup
 
@@ -518,7 +523,7 @@ All dates use `toUTCString()` (not `toLocaleString()`) to avoid hydration mismat
 | Buttons don't work | Interactivity request URL misconfigured | Must point to `/api/slack/events` |
 | Growth checklist not appearing | `invalid_blocks` — duplicate `action_id` in blocks | Each button in an `actions` block needs a unique `action_id` |
 | Duplicate messages | Slack retrying due to slow response | Retry skip is in place; check for multiple button clicks |
-| DM not delivered | `messages_tab_disabled` error | Enable "Messages Tab" in Slack app settings |
+| DM not delivered | Missing `conversations.open` before `postMessage`, or `messages_tab_disabled` | All DMs must use `conversations.open` first; enable "Messages Tab" in Slack app settings |
 | Hydration mismatch | Locale-dependent date formatting | Use `toUTCString()` instead of `toLocaleString()` |
 | State transition fails | Request not in expected state | Check `audit_log` for current state; may have been processed already |
 | Cron not running | Missing `CRON_SECRET` or wrong Vercel config | Verify env var matches and `vercel.json` cron paths are correct |
@@ -561,3 +566,16 @@ The Growth checklist in the channel is collaborative — any team member can tog
 ### In-Place Message Updates
 
 Instead of posting new messages for each change, the Growth checklist card is updated in-place via `chat.update`, keeping the channel clean.
+
+### DM Pattern: Always `conversations.open` First
+
+Every DM in the codebase follows the same pattern:
+
+```typescript
+const dm = await client.conversations.open({ users: targetUserId });
+if (dm.channel?.id) {
+  await client.chat.postMessage({ channel: dm.channel.id, text: "..." });
+}
+```
+
+Posting directly to a user ID (`channel: userId`) fails silently if the bot has never DMed that user before. `conversations.open` creates the DM channel first, ensuring reliable delivery. This applies to all 8 DM paths: employee confirmations, BP notifications, cron reminders, and SLA alerts.

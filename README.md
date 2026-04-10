@@ -26,7 +26,7 @@ Expose your local server with [ngrok](https://ngrok.com) and set the Slack app's
 2. Enable **Interactivity** — Request URL: `https://<domain>/api/slack/events`
 3. Add slash command **`/webinar`** — same Request URL
 4. Enable **Messages Tab** under App Home
-5. Bot token scopes: `chat:write`, `commands`, `users:read`, `im:write`
+5. Bot token scopes: `chat:write`, `commands`, `users:read`, `im:write`, `im:read`, `files:read`, `files:write`
 6. Install the app and invite the bot to `BP_CHANNEL_ID`, `GROWTH_CHANNEL_ID`, and `OPS_CHANNEL_ID`
 
 ## Project Layout
@@ -47,6 +47,7 @@ docs/                       Database schema and developer guide
 
 - **[Developer Guide](docs/developer-guide.md)** — architecture, flows, handlers, deployment, and troubleshooting
 - **[Database Schema](docs/database-schema.md)** — full SQL, table reference, state machine diagram
+- **[Admin Approval](docs/admin-approval.md)** — scope justifications and data handling for workspace admin review
 
 ## License
 
