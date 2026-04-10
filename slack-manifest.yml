@@ -7,7 +7,7 @@
 #   4. Paste this YAML and click through
 #   5. Install to workspace and copy the Bot Token + Signing Secret into .env.local
 #
-# After deploying to Vercel, update the three URLs below with your real domain.
+# Deployed at: https://internal-slack-bot-pi.vercel.app
 
 display_information:
   name: Webinar Ops Bot
@@ -23,7 +23,7 @@ features:
     always_online: true
   slash_commands:
     - command: /webinar
-      url: https://YOUR-VERCEL-DOMAIN/api/slack/events
+      url: https://internal-slack-bot-pi.vercel.app/api/slack/events
       description: Submit a new webinar request
       usage_hint: Opens a form to request a webinar session
       should_escape: false
@@ -35,13 +35,16 @@ oauth_config:
       - commands
       - users:read
       - im:write
+      - im:read
+      - files:read
+      - files:write
 
 settings:
   interactivity:
     is_enabled: true
-    request_url: https://YOUR-VERCEL-DOMAIN/api/slack/events
+    request_url: https://internal-slack-bot-pi.vercel.app/api/slack/events
   event_subscriptions:
-    request_url: https://YOUR-VERCEL-DOMAIN/api/slack/events
+    request_url: https://internal-slack-bot-pi.vercel.app/api/slack/events
     bot_events: []
   org_deploy_enabled: false
   socket_mode_enabled: false

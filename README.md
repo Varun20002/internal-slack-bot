@@ -1,48 +1,52 @@
 # CoinDCX Webinar Ops System
 
-Internal Slack app + dashboard for webinar request lifecycle (Employee → BP → Growth), backed by Supabase Postgres with atomic state transitions.
+Internal Slack app + dashboard for the webinar request lifecycle (Employee → BP → Growth), backed by Supabase Postgres with atomic state transitions.
 
 ## Stack
 
-- **Next.js** (App Router) — UI + API routes
-- **Slack Bolt** — `AwsLambdaReceiver` bridged to `/api/slack/events`
-- **Supabase** — Postgres; `@supabase/supabase-js` for reads/dashboard; `pg` + transactions for the state machine
-- **Vercel** — hosting + Cron
+- **Next.js 16** (App Router) — UI + API routes
+- **Slack Bolt** — command/action handlers via a custom noop receiver bridged to `/api/slack/events`
+- **Supabase** — Postgres database; `@supabase/supabase-js` for all DB access; `transition_state` RPC for atomic state changes
+- **Vercel** — serverless hosting + cron jobs
+- **Recharts + Tailwind CSS** — analytics dashboard
 
-## Setup
+## Quick Start
 
-1. Copy environment variables:
+```bash
+cp .env.example .env.local   # fill in all values
+npm install
+npm run dev
+```
 
-   ```bash
-   cp .env.example .env.local
-   ```
+Expose your local server with [ngrok](https://ngrok.com) and set the Slack app's Request URL to `https://<ngrok-url>/api/slack/events`.
 
-2. Create a Slack app (socket mode off). Enable **Interactivity**, **Slash Commands** (`/webinar`), **Event Subscriptions** (`app_home_opened`), **App Home** tab.
+## Slack App Setup
 
-   - Request URL / Interactivity: `https://<your-deployment>/api/slack/events`
-   - Bot token scopes (minimum): `app_mentions:read`, `channels:history`, `chat:write`, `commands`, `users:read`, `users:read.email` (optional), `im:write`, `im:history` (optional)
-   - Event subscription: subscribe to `app_home_opened`
-   - Install the app to your workspace and invite the bot to `BP_CHANNEL_ID`, `GROWTH_CHANNEL_ID`, and `OPS_CHANNEL_ID`
+1. Create a Slack app with **socket mode off**
+2. Enable **Interactivity** — Request URL: `https://<domain>/api/slack/events`
+3. Add slash command **`/webinar`** — same Request URL
+4. Enable **Messages Tab** under App Home
+5. Bot token scopes: `chat:write`, `commands`, `users:read`, `im:write`
+6. Install the app and invite the bot to `BP_CHANNEL_ID`, `GROWTH_CHANNEL_ID`, and `OPS_CHANNEL_ID`
 
-3. Run SQL in Supabase SQL editor from [`supabase/migrations/001_init.sql`](supabase/migrations/001_init.sql).
+## Project Layout
 
-4. Set `DATABASE_URL` to the Postgres connection string (pooler or direct) Supabase provides — same DB the service role uses.
+```
+src/app/api/slack/events/   Single Slack entrypoint (signature verify → Bolt dispatch)
+src/app/api/cron/           Daily SLA checks + weekly summary (secured with CRON_SECRET)
+src/slack/commands/         /webinar slash command + modal submission
+src/slack/actions/          BP, Employee, and Growth action handlers
+src/slack/blockKit.ts       All Block Kit card builders
+src/lib/stateMachine.ts     Atomic state transitions via Supabase RPC
+src/lib/supabase.ts         Supabase admin client singleton
+src/components/             Dashboard React components + charts
+docs/                       Database schema and developer guide
+```
 
-5. Install and run locally:
+## Documentation
 
-   ```bash
-   npm install
-   npm run dev
-   ```
-
-6. Deploy to Vercel. Add all env vars. Set **Cron** secret: generate a random `CRON_SECRET` and add the same value in Vercel project env (Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`).
-
-## Project layout
-
-- `src/app/api/slack/events` — Slack entrypoint
-- `src/app/api/cron/*` — scheduled jobs (secured with `CRON_SECRET`)
-- `src/lib/stateMachine.ts` — atomic state + audit log (via `pg`)
-- `src/slack/*` — commands, Block Kit actions, App Home
+- **[Developer Guide](docs/developer-guide.md)** — architecture, flows, handlers, deployment, and troubleshooting
+- **[Database Schema](docs/database-schema.md)** — full SQL, table reference, state machine diagram
 
 ## License
 
