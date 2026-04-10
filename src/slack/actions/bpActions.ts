@@ -190,10 +190,13 @@ export function registerBpActions(app: App): void {
 
     try {
       if (row?.employee_slack_id) {
-        await client.chat.postMessage({
-          channel: row.employee_slack_id,
-          text: `Your webinar request *${row.topic}* was rejected.\n*Reason:* ${reason}`,
-        });
+        const dm = await client.conversations.open({ users: row.employee_slack_id });
+        if (dm.channel?.id) {
+          await client.chat.postMessage({
+            channel: dm.channel.id,
+            text: `Your webinar request *${row.topic}* was rejected.\n*Reason:* ${reason}`,
+          });
+        }
       }
     } catch (e) {
       logger.error("Failed to DM employee after reject", e);
@@ -307,20 +310,23 @@ export function registerBpActions(app: App): void {
 
     try {
       if (row?.employee_slack_id) {
-        await client.chat.postMessage({
-          channel: row.employee_slack_id,
-          text: `BP suggested a new time for your webinar request *${row.topic}*.`,
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: `*${row.topic}*\nProposed time (UTC): \`${altIso}\``,
+        const dm = await client.conversations.open({ users: row.employee_slack_id });
+        if (dm.channel?.id) {
+          await client.chat.postMessage({
+            channel: dm.channel.id,
+            text: `BP suggested a new time for your webinar request *${row.topic}*.`,
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*${row.topic}*\nProposed time (UTC): \`${altIso}\``,
+                },
               },
-            },
-            ...employeeAltDecisionBlocks(requestId),
-          ],
-        });
+              ...employeeAltDecisionBlocks(requestId),
+            ],
+          });
+        }
       }
     } catch (e) {
       logger.error("Failed to DM employee after alt suggest", e);

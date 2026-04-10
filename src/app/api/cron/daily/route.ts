@@ -30,10 +30,13 @@ export async function GET(req: Request) {
 
   for (const row of reminders ?? []) {
     try {
-      await slack.chat.postMessage({
-        channel: row.employee_slack_id,
-        text: `Reminder: your confirmed webinar *${row.topic}* is coming up in the next 24 hours.`,
-      });
+      const dm = await slack.conversations.open({ users: row.employee_slack_id });
+      if (dm.channel?.id) {
+        await slack.chat.postMessage({
+          channel: dm.channel.id,
+          text: `Reminder: your confirmed webinar *${row.topic}* is coming up in the next 24 hours.`,
+        });
+      }
       await supabase.from("audit_log").insert({
         request_id: row.id,
         actor_id: "cron",
@@ -76,10 +79,17 @@ export async function GET(req: Request) {
       text: `SLA: Content incomplete for *${row.topic}* (\`${row.id}\`) — webinar in <48h.`,
     });
     if (row.growth_slack_id) {
-      await slack.chat.postMessage({
-        channel: row.growth_slack_id,
-        text: `Heads up: *${row.topic}* is less than 48 hours away and the content checklist is incomplete.`,
-      });
+      try {
+        const dm = await slack.conversations.open({ users: row.growth_slack_id });
+        if (dm.channel?.id) {
+          await slack.chat.postMessage({
+            channel: dm.channel.id,
+            text: `Heads up: *${row.topic}* is less than 48 hours away and the content checklist is incomplete.`,
+          });
+        }
+      } catch (e) {
+        console.error("content SLA DM failed", row.id, e);
+      }
     }
     await supabase.from("audit_log").insert({
       request_id: row.id,

@@ -44,10 +44,17 @@ export function registerEmployeeActions(app: App): void {
       return;
     }
 
-    await client.chat.postMessage({
-      channel: userId,
-      text: `You accepted the new time for *${row.topic}*. The session is confirmed.`,
-    });
+    try {
+      const dm = await client.conversations.open({ users: userId });
+      if (dm.channel?.id) {
+        await client.chat.postMessage({
+          channel: dm.channel.id,
+          text: `You accepted the new time for *${row.topic}*. The session is confirmed.`,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to DM employee after accept alt", e);
+    }
 
     // Notify BP channel card if we still have refs
     const { data: full } = await supabase
@@ -120,10 +127,17 @@ export function registerEmployeeActions(app: App): void {
       return;
     }
 
-    await client.chat.postMessage({
-      channel: userId,
-      text: `You declined the alternative for *${row.topic}*. The request is cancelled.`,
-    });
+    try {
+      const dm = await client.conversations.open({ users: userId });
+      if (dm.channel?.id) {
+        await client.chat.postMessage({
+          channel: dm.channel.id,
+          text: `You declined the alternative for *${row.topic}*. The request is cancelled.`,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to DM employee after decline alt", e);
+    }
 
     const { data: full } = await supabase
       .from("webinar_requests")
